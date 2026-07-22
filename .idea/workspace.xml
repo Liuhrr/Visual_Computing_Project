@@ -5,15 +5,7 @@
   </component>
   <component name="ChangeListManager">
     <list default="true" id="30dc4bad-4731-4bba-80cd-22adc3387161" name="更改" comment="">
-      <change beforePath="$PROJECT_DIR$/.idea/Visual Computing Project.iml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/Visual Computing Project.iml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/.idea/misc.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/misc.xml" afterDir="false" />
       <change beforePath="$PROJECT_DIR$/.idea/workspace.xml" beforeDir="false" afterPath="$PROJECT_DIR$/.idea/workspace.xml" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/configs/config.yaml" beforeDir="false" />
-      <change beforePath="$PROJECT_DIR$/danceapp.py" beforeDir="false" afterPath="$PROJECT_DIR$/danceapp.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/requirements.txt" beforeDir="false" afterPath="$PROJECT_DIR$/requirements.txt" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/utils/__init__.py" beforeDir="false" afterPath="$PROJECT_DIR$/utils/__init__.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/utils/pose_utils.py" beforeDir="false" afterPath="$PROJECT_DIR$/utils/pose_utils.py" afterDir="false" />
-      <change beforePath="$PROJECT_DIR$/utils/scoring.py" beforeDir="false" afterPath="$PROJECT_DIR$/utils/scoring.py" afterDir="false" />
     </list>
     <option name="SHOW_DIALOG" value="false" />
     <option name="HIGHLIGHT_CONFLICTS" value="true" />
