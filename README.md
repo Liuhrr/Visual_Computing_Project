@@ -45,18 +45,18 @@ python danceapp.py
 
 ## 📂 Project Structure
 Visual_Computing_Project/
-├── danceapp.py # Main GUI application
+├── danceapp.py              # Main GUI application
 ├── models/
-│ └── yolov8n-pose.pt # YOLOv8 pose estimation model
+│   └── yolov8n-pose.pt      # YOLOv8 pose estimation model
 ├── utils/
-│ ├── init.py
-│ ├── pose_utils.py # Keypoint extraction & angle calculation
-│ └── scoring.py # Similarity & scoring logic
-├── data/ # Reference videos (local only)
-│ └── TikTokDataset/ # Sample dance videos
-├── outputs/ # Saved results & logs
-├── .gitignore # Ignored files (videos, cache, etc.)
-└── requirements.txt # Python dependencies
+│   ├── __init__.py
+│   ├── pose_utils.py        # Keypoint extraction & angle calculation
+│   └── scoring.py           # Similarity & scoring logic
+├── data/                    # Reference videos (local only)
+│   └── TikTokDataset/       # Sample dance videos
+├── outputs/                 # Saved results & logs
+├── .gitignore               # Ignored files (videos, cache, etc.)
+└── requirements.txt         # Python dependencies
 
 ---
 
@@ -102,9 +102,4 @@ Visual_Computing_Project/
 - Uses COCO dataset keypoint format (17 points)
 - YOLOv8-pose model by Ultralytics
 
----
-
-## 📄 License
-
-This project is for educational purposes only.
 
