@@ -44,6 +44,7 @@ python danceapp.py
 ---
 
 ## 📂 Project Structure
+```
 Visual_Computing_Project/
 ├── danceapp.py              # Main GUI application
 ├── models/
@@ -57,6 +58,7 @@ Visual_Computing_Project/
 ├── outputs/                 # Saved results & logs
 ├── .gitignore               # Ignored files (videos, cache, etc.)
 └── requirements.txt         # Python dependencies
+```
 
 ---
 
