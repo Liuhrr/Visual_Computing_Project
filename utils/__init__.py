@@ -1,2 +1,1 @@
-from .pose_utils import *
-from .scoring import *
+"""Pose detection, reference analysis, and dance-scoring utilities."""
