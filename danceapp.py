@@ -32,7 +32,7 @@ from utils.reference import (
     ReferenceSequence,
     analyze_reference_video,
 )
-from utils.scoring import ScoreBreakdown, TemporalAligner, map_score_to_feedback
+from utils.scoring import ScoreBreakdown, TemporalAligner, map_score_to_feedback, WindowScorer
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -615,6 +615,7 @@ class PoseApp:
         self.selected_duration = 0.0
         self.reference: Optional[ReferenceSequence] = None
         self.aligner: Optional[TemporalAligner] = None
+        self.window_scorer = None
         self.reference_capture: Optional[cv2.VideoCapture] = None
         self.camera_capture: Optional[cv2.VideoCapture] = None
         self.live_worker: Optional[LivePoseWorker] = None
@@ -1265,6 +1266,8 @@ class PoseApp:
             self.feedback_counts[key] = 0
         self._reset_score_display()
         self.aligner.reset()
+        window_frames = max(5, int(self.reference.fps * 0.5))
+        self.window_scorer = WindowScorer(window_size=window_frames, punish_threshold=0.35)
         self._set_state(UIState.RUNNING)
         self.status_text.set("Starting pose tracking")
         self.feedback_text.set("GO")
@@ -1303,6 +1306,8 @@ class PoseApp:
             self.live_worker.stop()
             self.live_worker = None
         self._release_captures()
+        if self.window_scorer is not None:
+            self.window_scorer.reset()
 
     def _show_finished_state(self, *, completed: bool) -> None:
         average = (
@@ -1432,19 +1437,21 @@ class PoseApp:
                 else:
                     self.camera_panel.hide_overlay()
                 if result_frame_id != self.last_scored_frame_id:
-                    score_pose = (
-                        mirror_pose(pose)
-                        if self.mirror_match.get()
-                        else pose
-                    )
-                    alignment = self.aligner.align(
-                        score_pose,
-                        elapsed,
-                        previous_user_pose=self.previous_score_pose,
-                    )
-                    self.previous_score_pose = score_pose
-                    self.last_scored_frame_id = result_frame_id
-                    self._update_score(alignment.breakdown)
+                    score_pose = mirror_pose(pose) if self.mirror_match.get() else pose
+                    ref_pose = self.reference.poses[expected_index]
+                    if self.window_scorer is not None:
+                        self.window_scorer.add_frame(ref_pose, score_pose)
+                        window_breakdown = self.window_scorer.compute_window_score()
+                        if window_breakdown is not None:
+                            self.previous_score_pose = score_pose
+                            self.last_scored_frame_id = result_frame_id
+                            self._update_score(window_breakdown)
+                    else:
+                        # fallback to single-frame scoring
+                        alignment = self.aligner.align(score_pose, elapsed, previous_user_pose=self.previous_score_pose)
+                        self.previous_score_pose = score_pose
+                        self.last_scored_frame_id = result_frame_id
+                        self._update_score(alignment.breakdown)
             else:
                 self.pose_missing_frames += 1
                 if self.pose_missing_frames >= 3:

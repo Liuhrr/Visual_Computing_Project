@@ -55,10 +55,6 @@ SKELETON = (
 ANGLE_TRIPLETS = (
     (5, 7, 9),    # left elbow
     (6, 8, 10),   # right elbow
-    (7, 5, 11),   # left shoulder
-    (8, 6, 12),   # right shoulder
-    (5, 11, 13),  # left hip
-    (6, 12, 14),  # right hip
     (11, 13, 15), # left knee
     (12, 14, 16), # right knee
 )
