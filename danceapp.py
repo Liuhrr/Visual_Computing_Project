@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import argparse
 import os
 import queue
+import sys
 import threading
 import time
 from collections import deque
 from concurrent.futures import Future, ThreadPoolExecutor
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Callable, Optional
@@ -32,7 +35,16 @@ from utils.reference import (
     ReferenceSequence,
     analyze_reference_video,
 )
-from utils.scoring import ScoreBreakdown, TemporalAligner, map_score_to_feedback, WindowScorer
+from utils.scoring import ScoreBreakdown, TemporalAligner, map_score_to_feedback
+
+from wall_config import (
+    DEFAULT_WALL_POSES_PATH,
+    DEFAULT_WALL_SCHEDULE_PATH,
+    DEMO_OUTPUT_DIR,
+    WALL_SCORE_COMBO_CAP,
+)
+from wall_game import BonusEvent, FreezeGame, WallGame, build_wall_schedule
+from extract_wall_poses import extract_wall_poses, load_wall_poses, save_wall_poses
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent
@@ -69,6 +81,57 @@ FEEDBACK_COLORS = {
     "Good": Palette.AMBER,
     "Miss": Palette.RED,
 }
+
+
+@dataclass
+class DemoConfig:
+    enabled: bool = False
+    save_frames: bool = False
+    output_dir: Path = DEMO_OUTPUT_DIR
+
+
+class DemoPoseProvider:
+    """Synthetic pose generator for headless validation of the wall game.
+
+    Produces a matching pose when the active wall is in APPROACH/JUDGE,
+    then switches to a wrong pose during FAIL testing.
+    """
+
+    def __init__(self, wall_game: WallGame) -> None:
+        self.wall_game = wall_game
+        self._wrong_counter = 0
+
+    def get_pose(self, elapsed: float) -> Optional[Pose]:
+        wall = self.wall_game.active_wall
+        if wall is None:
+            return None
+
+        # For the first wall, deliberately fail to demonstrate FAIL state.
+        # For subsequent walls, match the target pose.
+        is_first = self.wall_game.next_spawn_index == 1
+        if is_first and wall.state in (WallState.APPROACH, WallState.JUDGE):
+            self._wrong_counter += 1
+            # Return a shifted/wrong pose
+            wrong = self._build_wrong_pose(wall.target_pose)
+            return wrong
+
+        # Match target pose with tiny noise
+        target = wall.target_pose
+        noise = np.random.normal(0.0, 2.0, target.xy.shape).astype(np.float32)
+        return Pose(
+            xy=target.xy + noise,
+            confidence=target.confidence.copy(),
+        )
+
+    @staticmethod
+    def _build_wrong_pose(target: Pose) -> Pose:
+        xy = target.xy.copy()
+        valid = valid_keypoints(target)
+        # Raise arms straight up to create obvious mismatch
+        for idx in (7, 8, 9, 10):
+            if valid[idx]:
+                xy[idx, 1] -= 120.0
+        return Pose(xy=xy, confidence=target.confidence.copy())
 
 
 class UIState(str, Enum):
@@ -603,7 +666,14 @@ class LivePoseWorker:
 
 
 class PoseApp:
-    def __init__(self, root: tk.Tk) -> None:
+    def __init__(
+        self,
+        root: tk.Tk,
+        *,
+        demo_config: Optional[DemoConfig] = None,
+        wall_enabled: bool = True,
+        freeze_enabled: bool = True,
+    ) -> None:
         self.root = root
         self.root.title("Dance Alignment")
         self.root.geometry("1200x760")
@@ -611,11 +681,14 @@ class PoseApp:
         self.root.configure(bg=Palette.CANVAS)
         self.root.protocol("WM_DELETE_WINDOW", self.close)
 
+        self.demo_config = demo_config or DemoConfig()
+        self.wall_enabled = wall_enabled
+        self.freeze_enabled = freeze_enabled
+
         self.video_path: Optional[Path] = None
         self.selected_duration = 0.0
         self.reference: Optional[ReferenceSequence] = None
         self.aligner: Optional[TemporalAligner] = None
-        self.window_scorer = None
         self.reference_capture: Optional[cv2.VideoCapture] = None
         self.camera_capture: Optional[cv2.VideoCapture] = None
         self.live_worker: Optional[LivePoseWorker] = None
@@ -647,6 +720,17 @@ class PoseApp:
             "Miss": 0,
         }
         self.last_feedback = ""
+
+        # Bonus activity state
+        self.wall_game: Optional[WallGame] = None
+        self.freeze_game: Optional[FreezeGame] = None
+        self.demo_provider: Optional[DemoPoseProvider] = None
+        self.bonus_score = 0
+        self.combo = 1
+        self.wall_poses_path = Path(DEFAULT_WALL_POSES_PATH)
+        self.wall_schedule_path = Path(DEFAULT_WALL_SCHEDULE_PATH)
+        self.bonus_event_queue: deque[BonusEvent] = deque(maxlen=10)
+        self.saved_demo_frames: set[str] = set()
 
         self.show_reference = tk.BooleanVar(value=True)
         self.mirror_match = tk.BooleanVar(value=True)
@@ -1209,6 +1293,7 @@ class PoseApp:
             self.reference.timestamps,
             search_window_seconds=0.45,
         )
+        self._ensure_wall_assets()
         body_coverage = [
             float(np.mean(valid_keypoints(pose)[5:17]))
             for pose in self.reference.poses
@@ -1227,6 +1312,28 @@ class PoseApp:
             message=f"Reference ready · {average_coverage:.0f}% coverage",
         )
 
+    def _ensure_wall_assets(self) -> None:
+        """Generate wall poses and schedule if they are missing."""
+        if not self.wall_enabled or self.reference is None:
+            return
+        if not self.wall_poses_path.is_file():
+            try:
+                poses = extract_wall_poses(self.reference)
+                save_wall_poses(poses, self.wall_poses_path)
+            except Exception as exc:
+                print(f"Wall pose extraction failed: {exc}", file=sys.stderr)
+                return
+        if not self.wall_schedule_path.is_file():
+            try:
+                poses = load_wall_poses(self.wall_poses_path)
+                build_wall_schedule(
+                    Path(self.reference.source_path),
+                    poses,
+                    self.wall_schedule_path,
+                )
+            except Exception as exc:
+                print(f"Wall schedule build failed: {exc}", file=sys.stderr)
+
     def start_dance(self) -> None:
         if self.running:
             return
@@ -1234,21 +1341,26 @@ class PoseApp:
             return
         self._stop_runtime()
         self.reference_capture = cv2.VideoCapture(self.reference.source_path)
-        self.camera_capture = cv2.VideoCapture(0)
         if not self.reference_capture.isOpened():
             self._release_captures()
             self._set_state(
                 UIState.READY, message="Unable to reopen the reference video"
             )
             return
-        if not self.camera_capture.isOpened():
-            self._release_captures()
-            self._set_state(UIState.CAMERA_ERROR)
-            return
 
-        self.camera_capture.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
-        self.camera_capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
-        self.live_worker = LivePoseWorker(MODEL_PATH)
+        if self.demo_config.enabled:
+            self.camera_capture = None
+        else:
+            self.camera_capture = cv2.VideoCapture(0)
+            if not self.camera_capture.isOpened():
+                self._release_captures()
+                self._set_state(UIState.CAMERA_ERROR)
+                return
+            self.camera_capture.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
+            self.camera_capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+            self.live_worker = LivePoseWorker(MODEL_PATH)
+
+        self._init_bonus_games()
         self.running = True
         self.start_time = time.perf_counter()
         self.reference_frame_index = -1
@@ -1262,17 +1374,42 @@ class PoseApp:
         self.camera_failures = 0
         self.score_history.clear()
         self.pose_result_times.clear()
+        self.bonus_score = 0
+        self.combo = 1
+        self.saved_demo_frames.clear()
         for key in self.feedback_counts:
             self.feedback_counts[key] = 0
         self._reset_score_display()
         self.aligner.reset()
-        window_frames = max(5, int(self.reference.fps * 0.5))
-        self.window_scorer = WindowScorer(window_size=window_frames, punish_threshold=0.35)
         self._set_state(UIState.RUNNING)
         self.status_text.set("Starting pose tracking")
         self.feedback_text.set("GO")
         self.camera_panel.show_overlay("Starting pose tracking…")
         self._tick()
+
+    def _init_bonus_games(self) -> None:
+        """Create wall/freeze game instances for the upcoming session."""
+        self.wall_game = None
+        self.freeze_game = None
+        self.demo_provider = None
+
+        if self.wall_enabled and self.wall_poses_path.is_file() and self.wall_schedule_path.is_file():
+            try:
+                self.wall_game = WallGame.from_files(
+                    self.wall_poses_path,
+                    self.wall_schedule_path,
+                    enabled=True,
+                )
+                if self.demo_config.enabled:
+                    self.demo_provider = DemoPoseProvider(self.wall_game)
+            except Exception as exc:
+                print(f"Failed to load wall game: {exc}", file=sys.stderr)
+                self.wall_game = None
+
+        if self.freeze_enabled:
+            from wall_config import FREEZE_EVENTS, load_demo_schedule
+            events = load_demo_schedule() if self.demo_config.enabled else FREEZE_EVENTS
+            self.freeze_game = FreezeGame(events=events, enabled=True)
 
     def stop_dance(self) -> None:
         had_scores = bool(self.score_history)
@@ -1306,8 +1443,6 @@ class PoseApp:
             self.live_worker.stop()
             self.live_worker = None
         self._release_captures()
-        if self.window_scorer is not None:
-            self.window_scorer.reset()
 
     def _show_finished_state(self, *, completed: bool) -> None:
         average = (
@@ -1315,30 +1450,44 @@ class PoseApp:
             if self.score_history
             else 0.0
         )
+        dance_score = int(round(average * 10))  # 0-1000 scale
+        total_score = dance_score + self.bonus_score
+        grade = self._compute_grade(total_score)
+
         self.average_value_text.set(f"{average:.1f}%")
         self.feedback_text.set("FINISHED")
         self.feedback_label.configure(fg=Palette.TEXT)
         self.coverage_text.set(
-            f"Perfect {self.feedback_counts['Perfect!']}   "
-            f"Super {self.feedback_counts['Super!']}"
+            f"Dance {dance_score}   Bonus {self.bonus_score}   Total {total_score}"
         )
-        self.timing_text.set(
-            f"Good {self.feedback_counts['Good']}   "
-            f"Miss {self.feedback_counts['Miss']}"
-        )
+        self.timing_text.set(f"Grade {grade}")
         self.metrics_text.set(
             f"{len(self.score_history)} evaluated poses · "
-            f"session average {average:.1f}%"
+            f"session average {average:.1f}% · "
+            f"Perfect {self.feedback_counts['Perfect!']}  "
+            f"Super {self.feedback_counts['Super!']}  "
+            f"Good {self.feedback_counts['Good']}  "
+            f"Miss {self.feedback_counts['Miss']}"
         )
         self.camera_panel.set_meta(
-            f"Session average {average:.1f}% · "
-            f"{len(self.score_history)} evaluated poses"
+            f"Dance {dance_score} · Bonus {self.bonus_score} · "
+            f"Total {total_score} · Grade {grade}"
         )
         message = "Dance complete" if completed else "Session stopped"
         self._set_state(
             UIState.FINISHED,
-            message=f"{message} · average {average:.1f}%",
+            message=f"{message} · total {total_score} · grade {grade}",
         )
+
+    @staticmethod
+    def _compute_grade(total_score: int) -> str:
+        if total_score >= 900:
+            return "S"
+        if total_score >= 750:
+            return "A"
+        if total_score >= 600:
+            return "B"
+        return "C"
 
     def _release_captures(self) -> None:
         for capture in (self.reference_capture, self.camera_capture):
@@ -1398,73 +1547,107 @@ class PoseApp:
             f"frame {expected_index + 1}"
         )
 
-        camera_ok, camera_frame = (
-            self.camera_capture.read()
-            if self.camera_capture is not None
-            else (False, None)
-        )
-        if not camera_ok or camera_frame is None:
-            self.camera_failures += 1
-            if self.camera_failures >= 5:
-                self._stop_runtime()
-                self._set_state(UIState.CAMERA_ERROR)
-                return
-            self.after_id = self.root.after(60, self._tick)
-            return
-        self.camera_failures = 0
-        camera_frame = cv2.flip(camera_frame, 1)
-        self.live_frame_id += 1
-
-        output = None
-        if self.live_worker is not None:
-            self.live_worker.submit(self.live_frame_id, camera_frame)
-            output = self.live_worker.latest()
-
-        if output is not None:
-            result_frame_id, pose, error = output
-            if error:
-                self._stop_runtime()
-                self._set_state(UIState.CAMERA_ERROR, message=error)
-                return
+        # ------------------------------------------------------------------
+        # Camera or demo frame acquisition
+        # ------------------------------------------------------------------
+        if self.demo_config.enabled:
+            camera_frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+            camera_frame[:] = (30, 30, 30)
+            self.live_frame_id += 1
             self.received_pose_result = True
             self.pose_result_times.append(now)
-            self.live_pose = pose
-            scoreable = self._is_scoreable_pose(pose)
-            if scoreable:
-                self.pose_missing_frames = 0
-                if self.ui_state == UIState.POSE_LOST:
-                    self._set_state(UIState.RUNNING)
-                else:
-                    self.camera_panel.hide_overlay()
-                if result_frame_id != self.last_scored_frame_id:
-                    score_pose = mirror_pose(pose) if self.mirror_match.get() else pose
-                    ref_pose = self.reference.poses[expected_index]
-                    if self.window_scorer is not None:
-                        self.window_scorer.add_frame(ref_pose, score_pose)
-                        window_breakdown = self.window_scorer.compute_window_score()
-                        if window_breakdown is not None:
-                            self.previous_score_pose = score_pose
-                            self.last_scored_frame_id = result_frame_id
-                            self._update_score(window_breakdown)
+            if self.demo_provider is not None:
+                self.live_pose = self.demo_provider.get_pose(elapsed)
+            else:
+                self.live_pose = None
+            self.camera_failures = 0
+        else:
+            camera_ok, camera_frame = (
+                self.camera_capture.read()
+                if self.camera_capture is not None
+                else (False, None)
+            )
+            if not camera_ok or camera_frame is None:
+                self.camera_failures += 1
+                if self.camera_failures >= 5:
+                    self._stop_runtime()
+                    self._set_state(UIState.CAMERA_ERROR)
+                    return
+                self.after_id = self.root.after(60, self._tick)
+                return
+            self.camera_failures = 0
+            camera_frame = cv2.flip(camera_frame, 1)
+            self.live_frame_id += 1
+
+            output = None
+            if self.live_worker is not None:
+                self.live_worker.submit(self.live_frame_id, camera_frame)
+                output = self.live_worker.latest()
+
+            if output is not None:
+                result_frame_id, pose, error = output
+                if error:
+                    self._stop_runtime()
+                    self._set_state(UIState.CAMERA_ERROR, message=error)
+                    return
+                self.received_pose_result = True
+                self.pose_result_times.append(now)
+                self.live_pose = pose
+                scoreable = self._is_scoreable_pose(pose)
+                if scoreable:
+                    self.pose_missing_frames = 0
+                    if self.ui_state == UIState.POSE_LOST:
+                        self._set_state(UIState.RUNNING)
                     else:
-                        # fallback to single-frame scoring
-                        alignment = self.aligner.align(score_pose, elapsed, previous_user_pose=self.previous_score_pose)
+                        self.camera_panel.hide_overlay()
+                    if result_frame_id != self.last_scored_frame_id:
+                        score_pose = (
+                            mirror_pose(pose)
+                            if self.mirror_match.get()
+                            else pose
+                        )
+                        alignment = self.aligner.align(
+                            score_pose,
+                            elapsed,
+                            previous_user_pose=self.previous_score_pose,
+                        )
                         self.previous_score_pose = score_pose
                         self.last_scored_frame_id = result_frame_id
                         self._update_score(alignment.breakdown)
-            else:
-                self.pose_missing_frames += 1
-                if self.pose_missing_frames >= 3:
-                    self._set_state(UIState.POSE_LOST)
-        elif not self.received_pose_result:
-            self.camera_panel.set_meta("Loading pose model…")
+                else:
+                    self.pose_missing_frames += 1
+                    if self.pose_missing_frames >= 3:
+                        self._set_state(UIState.POSE_LOST)
+            elif not self.received_pose_result:
+                self.camera_panel.set_meta("Loading pose model…")
 
+        # ------------------------------------------------------------------
+        # Bonus activities overlay
+        # ------------------------------------------------------------------
         camera_display = draw_pose(
             camera_frame,
             self.live_pose,
             line_color=(138, 117, 97),
             point_color=(235, 231, 225),
         )
+
+        if self.wall_game is not None:
+            camera_display, events = self.wall_game.update(
+                elapsed, self.live_pose, camera_display
+            )
+            self._apply_bonus_events(events)
+
+        if self.freeze_game is not None:
+            camera_display, event = self.freeze_game.update(
+                elapsed, self.live_pose, camera_display
+            )
+            if event is not None:
+                self._apply_bonus_events([event])
+
+        if self.demo_config.enabled:
+            camera_display = self._annotate_demo_mode(camera_display, elapsed)
+            self._save_demo_snapshot(camera_display, elapsed)
+
         self.camera_panel.set_frame(camera_display)
         if self.received_pose_result and self.ui_state == UIState.RUNNING:
             visible = (
@@ -1472,10 +1655,14 @@ class PoseApp:
                 if self.live_pose is not None
                 else 0
             )
-            self.camera_panel.set_meta(
-                f"Pose detected · {visible}/12 body joints · "
-                f"{self._pose_fps():.1f} FPS"
-            )
+            meta_parts = [
+                f"Pose detected · {visible}/12 body joints",
+                f"{self._pose_fps():.1f} FPS",
+            ]
+            if self.wall_game is not None:
+                meta_parts.append(f"bonus {self.bonus_score}")
+                meta_parts.append(f"combo x{self.combo}")
+            self.camera_panel.set_meta(" · ".join(meta_parts))
         self.after_id = self.root.after(10, self._tick)
 
     @staticmethod
@@ -1537,6 +1724,78 @@ class PoseApp:
         else:
             self.feedback_label.configure(fg=color)
 
+    def _apply_bonus_events(self, events: list[BonusEvent]) -> None:
+        """Update bonus score, combo, and UI from wall/freeze events."""
+        if not events:
+            return
+        for event in events:
+            self.bonus_score += event.score
+            if event.combo > 0:
+                self.combo = min(event.combo, WALL_SCORE_COMBO_CAP)
+            self.bonus_event_queue.append(event)
+
+    def _annotate_demo_mode(self, frame: np.ndarray, elapsed: float) -> np.ndarray:
+        """Overlay demo-only information so screenshots are self-explanatory."""
+        h, w = frame.shape[:2]
+        cv2.putText(
+            frame,
+            "DEMO MODE",
+            (20, 40),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            1.0,
+            (80, 220, 255),
+            2,
+            cv2.LINE_AA,
+        )
+        cv2.putText(
+            frame,
+            f"elapsed {elapsed:.1f}s  bonus {self.bonus_score}  combo x{self.combo}",
+            (20, 80),
+            cv2.FONT_HERSHEY_SIMPLEX,
+            0.65,
+            (200, 200, 200),
+            1,
+            cv2.LINE_AA,
+        )
+        recent = list(self.bonus_event_queue)[-3:]
+        y = 115
+        for ev in reversed(recent):
+            color = (80, 240, 80) if ev.score >= 0 else (80, 80, 255)
+            cv2.putText(
+                frame,
+                f"{ev.message}  {ev.score:+,}",
+                (20, y),
+                cv2.FONT_HERSHEY_SIMPLEX,
+                0.6,
+                color,
+                1,
+                cv2.LINE_AA,
+            )
+            y += 28
+        return frame
+
+    def _save_demo_snapshot(self, frame: np.ndarray, elapsed: float) -> None:
+        if not self.demo_config.save_frames:
+            return
+        if self.wall_game is None or self.wall_game.active_wall is None:
+            return
+        state = self.wall_game.active_wall.state
+        label_map = {
+            WallState.SPAWN: "spawn",
+            WallState.APPROACH: "approach",
+            WallState.JUDGE: "judge",
+            WallState.PASS: "pass",
+            WallState.FAIL: "fail",
+        }
+        label = label_map.get(state)
+        if label is None or label in self.saved_demo_frames:
+            return
+        self.saved_demo_frames.add(label)
+        out_dir = self.demo_config.output_dir
+        out_dir.mkdir(parents=True, exist_ok=True)
+        path = out_dir / f"demo_{label}_{elapsed:.2f}.png"
+        cv2.imwrite(str(path), frame)
+
     def _animate_feedback(self, target: str) -> None:
         if self.feedback_animation_id is not None:
             try:
@@ -1583,8 +1842,56 @@ class PoseApp:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser(
+        description="NUS Visual Computing Just Dance + Hole in the Wall bonus"
+    )
+    parser.add_argument(
+        "--demo",
+        action="store_true",
+        help="Run in headless demo mode with synthetic poses (no camera required)",
+    )
+    parser.add_argument(
+        "--demo-save-frames",
+        action="store_true",
+        help="Save key demo frames to outputs/wall_demo/",
+    )
+    parser.add_argument(
+        "--no-wall",
+        action="store_true",
+        help="Disable the wall bonus activity",
+    )
+    parser.add_argument(
+        "--no-freeze",
+        action="store_true",
+        help="Disable the FREEZE bonus activity",
+    )
+    parser.add_argument(
+        "--video",
+        type=Path,
+        default=None,
+        help="Pre-select a reference video to load on startup",
+    )
+    args = parser.parse_args()
+
+    demo_config = DemoConfig(
+        enabled=args.demo,
+        save_frames=args.demo_save_frames,
+    )
+
     root = tk.Tk()
-    PoseApp(root)
+    app = PoseApp(
+        root,
+        demo_config=demo_config,
+        wall_enabled=not args.no_wall,
+        freeze_enabled=not args.no_freeze,
+    )
+    if args.video is not None and args.video.is_file():
+        app.video_path = args.video.resolve()
+        if app._show_video_preview():
+            app._set_state(
+                UIState.VIDEO_LOADED,
+                message=f"Loaded · {app.video_path.name}",
+            )
     root.mainloop()
 
 

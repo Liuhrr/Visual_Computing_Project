@@ -4,5 +4,12 @@ torch>=2.3
 ultralytics>=8.3,<9
 pillow>=10
 
+# Web frontend server
+flask>=3.0
+
+# Optional: enables beat tracking for wall spawn scheduling.
+# If absent, walls fall back to a fixed time interval.
+# librosa
+
 # Development / verification
 pytest>=8

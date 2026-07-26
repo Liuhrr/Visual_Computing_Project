@@ -51,7 +51,7 @@ aspect ratio.
 ## Quick start with the provided Conda environment
 
 ```bash
-cd /Users/quchengzou/Documents/Codex/2026-07-22/z/Visual_Computing_Project
+cd /Users/quchengzou/Desktop/NUS_Project/Visual_Computing_Project_wall_work_2026-07-25-225019
 conda activate nus
 python danceapp.py
 ```
@@ -180,6 +180,10 @@ Visual_Computing_Project/
 │   ├── pose_utils.py           # selection, extraction, smoothing, normalization
 │   ├── reference.py            # reference analysis and .npz cache
 │   └── scoring.py              # spatial/temporal scoring and feedback
+├── wall_config.py              # tunables for the bonus activity
+├── wall_game.py                # wall state machine, rendering, FREEZE mini-game
+├── extract_wall_poses.py       # offline iconic-pose extraction from reference video
+├── scripts/demo_wall.py        # headless demo saving key frames
 ├── tests/                      # deterministic synthetic-pose tests
 ├── data/TikTokDataset/         # supplied metadata; local videos are ignored
 ├── PROJECT_PLAN.md             # requirement checklist and demo acceptance plan
@@ -206,6 +210,112 @@ python scripts/smoke_test_model.py --source /path/to/video.mp4
 ```
 
 The smoke test writes an annotated image under `outputs/smoke_test/`.
+
+## Bonus activity: Hole in the Wall + FREEZE
+
+This build adds an optional bonus activity on top of the core Just Dance scorer.
+All bonus code lives in new files; the original scoring pipeline is unchanged.
+
+### What was added
+
+- **Wall poses (`extract_wall_poses.py`)**: automatically picks 8–15 iconic poses
+  from the reference video by finding low-motion, high-confidence intervals.
+- **Wall game (`wall_game.py`)**: procedural grey wall with a human-shaped
+  transparent cutout, guide skeleton, approach animation, judgement line, and
+  PASS/FAIL particle effects.
+- **Pose matching**: uses the existing `compute_pose_score` and
+  `normalize_pose` functions (no new model).
+- **FREEZE mini-game**: music-stops event where the player must hold still;
+  movement is measured by accumulated keypoint displacement.
+- **Integration (`danceapp.py`)**: bonus score and combo are displayed live and
+  summarized in the finished state as Dance / Bonus / Total / Grade.
+
+### Running the bonus activity
+
+1. Generate wall poses and schedule from a reference video (done once per video):
+
+   ```bash
+   conda activate nus
+   python extract_wall_poses.py data/dance_example_1.mp4
+   ```
+
+   The schedule is created automatically the first time you click
+   **Analyze Reference** or **Start Dance**.
+
+2. Run the main app with walls enabled (default):
+
+   ```bash
+   python danceapp.py
+   ```
+
+3. Headless demo (no camera, saves key frames to `outputs/wall_demo/`):
+
+   ```bash
+   python danceapp.py --demo --demo-save-frames --video data/dance_example_1.mp4
+   ```
+
+   A standalone demo script is also available:
+
+   ```bash
+   python scripts/demo_wall.py
+   ```
+
+### Command-line flags
+
+| Flag | Effect |
+|---|---|
+| `--demo` | Synthetic poses, no camera required |
+| `--demo-save-frames` | Save SPAWN/APPROACH/JUDGE/PASS/FAIL frames |
+| `--no-wall` | Disable the wall bonus |
+| `--no-freeze` | Disable the FREEZE mini-game |
+| `--video PATH` | Pre-load a reference video on startup |
+
+### Tunables (see `wall_config.py`)
+
+- `WALL_APPROACH_SECONDS`: how long the wall takes to reach the judge line.
+- `WALL_SIMILARITY_PERFECT` / `WALL_SIMILARITY_GOOD`: judgement thresholds.
+- `WALL_TIME_WINDOWS`: intervals where walls are allowed to spawn.
+- `WALL_INTERVAL_SECONDS`: fixed-interval fallback if `librosa` is unavailable.
+- `FREEZE_EVENTS`: list of `{start, duration}` silence events.
+- `FREEZE_DISPLACEMENT_THRESHOLD`: movement tolerance in pixels.
+
+### Web-based Bonus Level frontend
+
+A browser-based frontend is available in `web_bonus/`. It connects to the **same**
+existing pose detection, scoring, wall, and FREEZE logic via a small Flask
+backend (`web_app.py`).
+
+```bash
+conda activate nus
+python web_app.py
+```
+
+Then open:
+
+```text
+http://127.0.0.1:8080
+```
+
+The server auto-loads `data/dance_example_1.mp4` on startup (if present) so you
+can click **Start Game** immediately. You can also upload your own reference
+video; analysis runs in the background and the UI enables the start button as
+soon as it is ready.
+
+What the web frontend provides:
+
+- Landing page with rules
+- Reference video upload / auto-load
+- Real-time camera stream with processed overlays
+- Live HUD: Dance score, Bonus score, Combo, Feedback, visible joints, FPS
+- Wall badge and FREEZE overlay
+- Stop and final-result screen with grade
+
+### Demo / test output
+
+- `outputs/wall_demo/` contains representative frames for each wall state and
+  FREEZE outcome.
+- `cache/wall_poses.json` and `cache/wall_schedule.json` cache the extracted
+  poses and spawn times.
 
 ## Known limitations and sensible scope
 

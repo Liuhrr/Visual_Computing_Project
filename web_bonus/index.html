@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Bonus Level — Dance Alignment + Hole in the Wall</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Unna:wght@400;700&family=Quattrocento+Sans:wght@400;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div id="app">
+        <!-- Landing / Rules -->
+        <section id="screen-landing" class="screen active">
+            <div class="top-bar"></div>
+            <div class="landing-content">
+                <div class="kicker">Bonus Level · Real-Time Body Pose Game</div>
+                <h1 class="title">Dance Alignment + <span class="accent">Hole in the Wall</span></h1>
+                <div class="title-rule"></div>
+                <p class="subtitle">Upload a reference dance video, then mirror the moves in real time.</p>
+
+                <div class="rules">
+                    <div class="rule">
+                        <span class="rule-num">01</span>
+                        <span>Follow the reference dancer. Score builds from pose similarity.</span>
+                    </div>
+                    <div class="rule">
+                        <span class="rule-num">02</span>
+                        <span>When a wall flies in, fit through the human-shaped cutout.</span>
+                    </div>
+                    <div class="rule">
+                        <span class="rule-num">03</span>
+                        <span>On FREEZE!, hold completely still until the music resumes.</span>
+                    </div>
+                </div>
+
+                <div class="upload-zone" id="upload-zone">
+                    <input type="file" id="video-input" accept="video/mp4,video/quicktime,video/avi,video/x-matroska" hidden>
+                    <div class="upload-prompt">
+                        <div class="upload-icon">↑</div>
+                        <div class="upload-text">Drop a dance video here or click to browse</div>
+                        <div class="upload-formats">MP4, MOV, AVI, MKV</div>
+                    </div>
+                    <div class="upload-loading hidden">Analyzing reference…</div>
+                    <div class="upload-done hidden">✓ Reference ready</div>
+                </div>
+
+                <div class="actions">
+                    <button id="btn-start" class="btn btn-primary" disabled>Start Game</button>
+                </div>
+
+                <div id="error-landing" class="error-message hidden"></div>
+            </div>
+            <footer class="footer">
+                <span>SWS3026 Visual Computing · Group Project — Bonus Level</span>
+            </footer>
+        </section>
+
+        <!-- Playing -->
+        <section id="screen-game" class="screen">
+            <div class="game-header">
+                <div class="game-title">Bonus Level</div>
+                <div class="game-timer" id="timer">00:00 / 00:00</div>
+                <button id="btn-stop" class="btn btn-danger">Stop</button>
+            </div>
+
+            <div class="video-stage">
+                <img id="video-feed" class="video-feed" alt="Game stream">
+
+                <!-- Overlays -->
+                <div id="freeze-overlay" class="freeze-overlay hidden">
+                    <div class="freeze-title">FREEZE!</div>
+                    <div class="freeze-sub">Hold still</div>
+                </div>
+
+                <div id="wall-badge" class="wall-badge hidden">
+                    <div class="wall-label">WALL</div>
+                    <div class="wall-match" id="wall-match">0%</div>
+                </div>
+
+                <div id="feedback-flash" class="feedback-flash"></div>
+            </div>
+
+            <div class="hud">
+                <div class="hud-card">
+                    <div class="hud-label">Dance</div>
+                    <div class="hud-value" id="hud-dance">0</div>
+                </div>
+                <div class="hud-card">
+                    <div class="hud-label">Bonus</div>
+                    <div class="hud-value" id="hud-bonus">0</div>
+                </div>
+                <div class="hud-card">
+                    <div class="hud-label">Combo</div>
+                    <div class="hud-value" id="hud-combo">x1</div>
+                </div>
+                <div class="hud-card hud-card-feedback">
+                    <div class="hud-label">Feedback</div>
+                    <div class="hud-value" id="hud-feedback">READY</div>
+                </div>
+                <div class="hud-card">
+                    <div class="hud-label">Joints</div>
+                    <div class="hud-value" id="hud-joints">0/12</div>
+                </div>
+                <div class="hud-card">
+                    <div class="hud-label">FPS</div>
+                    <div class="hud-value" id="hud-fps">0</div>
+                </div>
+            </div>
+
+            <div id="error-game" class="error-message hidden"></div>
+        </section>
+
+        <!-- Results -->
+        <section id="screen-result" class="screen">
+            <div class="result-content">
+                <div class="kicker">Session Complete</div>
+                <h1 class="title">Final Score</h1>
+                <div class="grade-circle" id="result-grade">S</div>
+                <div class="result-total" id="result-total">0</div>
+
+                <div class="result-breakdown">
+                    <div class="result-item">
+                        <span class="result-label">Dance Score</span>
+                        <span class="result-value" id="result-dance">0</span>
+                    </div>
+                    <div class="result-item">
+                        <span class="result-label">Bonus Score</span>
+                        <span class="result-value" id="result-bonus">0</span>
+                    </div>
+                    <div class="result-item">
+                        <span class="result-label">Total</span>
+                        <span class="result-value" id="result-total-row">0</span>
+                    </div>
+                </div>
+
+                <div class="actions">
+                    <button id="btn-restart" class="btn btn-primary">Play Again</button>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>
