@@ -19,7 +19,7 @@ from web_game import WebGameSession
 
 PROJECT_ROOT = Path(__file__).resolve().parent
 WEB_DIR = PROJECT_ROOT / "web_bonus"
-DEFAULT_VIDEO = PROJECT_ROOT / "data" / "dance_example_1.mp4"
+DEFAULT_VIDEO = PROJECT_ROOT / "data" / "SeeMeDoMyDance_saltyfrenchfry_0_9s_0.5x.mp4"
 ALLOWED_VIDEO = {".mp4", ".mov", ".avi", ".mkv"}
 
 app = Flask(__name__, static_folder=str(WEB_DIR / "static"), template_folder=str(WEB_DIR))

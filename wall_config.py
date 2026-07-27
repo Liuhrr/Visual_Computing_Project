@@ -18,7 +18,7 @@ DEFAULT_WALL_SCHEDULE_PATH = PROJECT_ROOT / "cache" / "wall_schedule.json"
 # -----------------------------------------------------------------------------
 # Wall geometry & timing
 # -----------------------------------------------------------------------------
-WALL_APPROACH_SECONDS: float = 1.8          # time from spawn to judge line
+WALL_APPROACH_SECONDS: float = 4.0          # time from spawn to judge line (slower for demo)
 WALL_SPAWN_SCALE: float = 0.2               # initial visual scale
 WALL_JUDGE_SCALE: float = 1.0               # scale at the judge line
 WALL_JUDGE_Y_RATIO: float = 0.75            # judge line position (ratio of frame height)
@@ -56,7 +56,7 @@ WALL_SCORE_COMBO_CAP: int = 4               # max combo multiplier
 # -----------------------------------------------------------------------------
 # Wall spawning schedule
 # -----------------------------------------------------------------------------
-WALL_INTERVAL_SECONDS: float = 10.0         # fixed-interval fallback
+WALL_INTERVAL_SECONDS: float = 12.0         # fixed-interval fallback (more breathing room)
 WALL_TIME_WINDOWS: list[tuple[float, float]] = [
     (8.0, 25.0),
     (38.0, 55.0),

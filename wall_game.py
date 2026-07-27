@@ -447,10 +447,41 @@ def build_wall_schedule(
     """Build a schedule of wall spawn times.
 
     Prefers librosa beat tracking inside configured time windows; falls back
-    to a fixed interval otherwise.
+    to a fixed interval otherwise.  Windows are clamped to the actual video
+    duration so short demo clips still get walls.
     """
     beats = _load_audio_beats(video_path)
-    windows = cfg.WALL_TIME_WINDOWS
+    windows = list(cfg.WALL_TIME_WINDOWS)
+
+    # Determine reference duration from the video file.
+    duration = 0.0
+    try:
+        cap = cv2.VideoCapture(str(video_path))
+        if cap.isOpened():
+            fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
+            frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+            duration = frames / fps if fps > 0 else 0.0
+        cap.release()
+    except Exception:
+        duration = 0.0
+
+    # Clamp configured windows to the video duration.
+    if duration > 0:
+        clamped: list[tuple[float, float]] = []
+        for start, end in windows:
+            if start >= duration:
+                continue
+            clamped.append((float(start), float(min(end, duration))))
+        windows = clamped
+
+    # If nothing is usable (e.g. very short clip), use a proportional window.
+    if not windows and duration > 0:
+        windows = [
+            (
+                max(1.0, duration * 0.20),
+                max(2.0, duration * 0.85),
+            )
+        ]
 
     spawn_times: list[float] = []
     source = "fixed"
@@ -476,6 +507,15 @@ def build_wall_schedule(
             start_time + i * cfg.WALL_INTERVAL_SECONDS
             for i in range(len(wall_poses))
         ]
+
+    # Drop spawn times that are too late for the wall to fully approach.
+    if duration > 0:
+        max_spawn = max(0.0, duration - cfg.WALL_APPROACH_SECONDS - 0.5)
+        spawn_times = [t for t in spawn_times if t <= max_spawn]
+
+    # Guarantee at least one wall if we have poses and enough duration.
+    if not spawn_times and wall_poses and duration > cfg.WALL_APPROACH_SECONDS + 1.0:
+        spawn_times = [max(1.0, duration * 0.25)]
 
     schedule = {
         "source": source,

@@ -240,8 +240,22 @@ class WebGameSession:
                 )
             except Exception:
                 pass
-        from wall_config import FREEZE_EVENTS
-        self.freeze_game = FreezeGame(events=FREEZE_EVENTS, enabled=True)
+        # Use FREEZE events that fit the reference duration so short clips
+        # still get a FREEZE moment and long clips get two.
+        ref_duration = self.reference.duration if self.reference else 0.0
+        if ref_duration >= 18.0:
+            freeze_events = [
+                {"start": ref_duration * 0.30, "duration": 2.5},
+                {"start": ref_duration * 0.65, "duration": 3.0},
+            ]
+        elif ref_duration >= 8.0:
+            freeze_events = [
+                {"start": ref_duration * 0.45, "duration": 2.5},
+            ]
+        else:
+            from wall_config import FREEZE_EVENTS
+            freeze_events = FREEZE_EVENTS
+        self.freeze_game = FreezeGame(events=freeze_events, enabled=True)
 
         # Reset state
         self._start_time = time.perf_counter()

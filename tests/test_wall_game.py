@@ -45,7 +45,7 @@ def test_wall_spawns_and_judges_matching_pose() -> None:
     frame = np.zeros((720, 1280, 3), dtype=np.uint8)
     elapsed = 0.0
     events = []
-    while elapsed < 3.0:
+    while elapsed < 6.0:
         frame, ev = game.update(elapsed, target, frame)
         events.extend(ev)
         elapsed += 0.033
@@ -66,7 +66,7 @@ def test_wall_judges_wrong_pose_as_miss() -> None:
     frame = np.zeros((720, 1280, 3), dtype=np.uint8)
     elapsed = 0.0
     events = []
-    while elapsed < 3.0:
+    while elapsed < 6.0:
         frame, ev = game.update(elapsed, wrong_pose, frame)
         events.extend(ev)
         elapsed += 0.033
