@@ -274,6 +274,24 @@ def fit_camera_frame(
     return canvas
 
 
+def request_widest_camera_view(capture: cv2.VideoCapture) -> tuple[bool, float]:
+    """Ask the camera driver to use manual minimum zoom.
+
+    OpenCV cannot control Windows Studio Effects on every device, but writing
+    the zoom property while streaming switches many UVC/DirectShow cameras out
+    of automatic digital framing. Unsupported drivers report a negative value
+    or reject the write, in which case the UI directs the player to Windows
+    Camera Settings.
+    """
+
+    try:
+        write_ok = bool(capture.set(cv2.CAP_PROP_ZOOM, 0.0))
+        zoom = float(capture.get(cv2.CAP_PROP_ZOOM))
+    except (AttributeError, TypeError, ValueError, cv2.error):
+        return False, -1.0
+    return write_ok and np.isfinite(zoom) and zoom >= 0.0, zoom
+
+
 class LivePoseWorker:
     """Run YOLO inference away from Tk's UI thread."""
 
@@ -416,6 +434,10 @@ class SilhouetteGame:
         self.last_result_frame = -1
         self.camera_failures = 0
         self.camera_capture: Optional[cv2.VideoCapture] = None
+        self.camera_control_attempted = False
+        self.camera_view_locked = False
+        self.camera_zoom_value = -1.0
+        self.last_camera_lock_time = 0.0
         self.worker: Optional[LivePoseWorker] = None
         self.after_id: Optional[str] = None
         self.camera_photo: Optional[ImageTk.PhotoImage] = None
@@ -428,6 +450,7 @@ class SilhouetteGame:
         self.status_text = tk.StringVar(value="正在连接摄像头与姿态模型…")
         self.match_text = tk.StringVar(value="匹配度 --")
         self.button_text = tk.StringVar(value="开始游戏  SPACE")
+        self.camera_mode_text = tk.StringVar(value="正在锁定广角")
 
         self._build_ui()
         self._open_camera()
@@ -545,13 +568,28 @@ class SilhouetteGame:
             fg="#FFFFFF",
             font=("Microsoft YaHei UI", 13, "bold"),
         ).pack(side=tk.LEFT)
+        tk.Button(
+            camera_header,
+            text="关闭自动取景",
+            command=self.open_camera_settings,
+            bg="#252525",
+            fg="#FFFFFF",
+            activebackground="#3A3A3A",
+            activeforeground="#FFFFFF",
+            relief=tk.FLAT,
+            bd=0,
+            padx=10,
+            pady=5,
+            cursor="hand2",
+            font=("Microsoft YaHei UI", 9),
+        ).pack(side=tk.RIGHT)
         tk.Label(
             camera_header,
-            text="LIVE",
+            textvariable=self.camera_mode_text,
             bg="#0A0A0A",
-            fg="#FF5252",
-            font=("Arial", 10, "bold"),
-        ).pack(side=tk.RIGHT)
+            fg="#8BFF9B",
+            font=("Microsoft YaHei UI", 9, "bold"),
+        ).pack(side=tk.RIGHT, padx=(0, 10))
 
         camera_viewport = tk.Frame(
             camera_card,
@@ -633,11 +671,53 @@ class SilhouetteGame:
             self.status_text.set("无法打开摄像头。请检查系统权限或是否被其他应用占用。")
             return
 
-        capture.set(cv2.CAP_PROP_FRAME_WIDTH, 960)
-        capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
+        capture.set(cv2.CAP_PROP_FRAME_WIDTH, 640)
+        capture.set(cv2.CAP_PROP_FRAME_HEIGHT, 480)
         capture.set(cv2.CAP_PROP_BUFFERSIZE, 1)
         self.camera_capture = capture
-        self.status_text.set("摄像头已连接，姿态模型正在加载…")
+        self.camera_control_attempted = False
+        self.camera_view_locked = False
+        self.camera_zoom_value = -1.0
+        self.last_camera_lock_time = 0.0
+        self.camera_mode_text.set("正在锁定广角")
+        self.status_text.set("摄像头已连接，正在关闭自动缩放…")
+
+    def open_camera_settings(self) -> None:
+        """Open Windows camera controls so Studio Effects can be disabled."""
+
+        if os.name != "nt":
+            self.status_text.set("请在系统摄像头设置中关闭自动取景或人物跟踪。")
+            return
+        try:
+            os.startfile("ms-settings:camera")
+            self.status_text.set(
+                "请选择正在使用的摄像头，关闭“自动取景/Automatic framing”。"
+            )
+        except OSError as exc:
+            self.status_text.set(f"无法打开摄像头设置：{exc}")
+
+    def _lock_camera_view(self, now: float) -> None:
+        capture = self.camera_capture
+        if capture is None:
+            return
+        if self.camera_control_attempted and not self.camera_view_locked:
+            return
+        if self.camera_view_locked and now - self.last_camera_lock_time < 1.0:
+            return
+
+        locked, zoom = request_widest_camera_view(capture)
+        self.camera_control_attempted = True
+        self.camera_view_locked = locked
+        self.camera_zoom_value = zoom
+        self.last_camera_lock_time = now
+        if locked:
+            self.camera_mode_text.set("固定广角")
+        else:
+            self.camera_mode_text.set("需关闭自动取景")
+            if self.state == GameState.IDLE:
+                self.status_text.set(
+                    "摄像头不允许程序关闭人物跟踪；请点击“关闭自动取景”。"
+                )
 
     def start_game(self) -> None:
         if self.state in (GameState.PREPARING, GameState.PLAYING, GameState.SUCCESS):
@@ -771,6 +851,7 @@ class SilhouetteGame:
             if ok and raw is not None:
                 self.camera_failures = 0
                 frame = cv2.flip(raw, 1)
+                self._lock_camera_view(now)
                 self.frame_id += 1
                 if self.worker is not None:
                     self.worker.submit(self.frame_id, frame)
@@ -790,7 +871,12 @@ class SilhouetteGame:
                 self.latest_pose = pose
                 self.latest_pose_time = now
                 if first_result and self.state == GameState.IDLE:
-                    self.status_text.set("姿态模型已就绪。点击开始或按空格键。")
+                    if self.camera_control_attempted and not self.camera_view_locked:
+                        self.status_text.set(
+                            "姿态模型已就绪；请点击“关闭自动取景”后再开始。"
+                        )
+                    else:
+                        self.status_text.set("姿态模型已就绪。点击开始或按空格键。")
 
         if frame is not None:
             display = draw_pose(
