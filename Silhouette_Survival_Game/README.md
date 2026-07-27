@@ -29,21 +29,21 @@ Silhouette_Survival_Game/
 
 ## 安装与运行
 
-当前文件夹已经准备好隔离环境，直接运行：
+首次下载后，先创建隔离环境并安装依赖：
 
 ```powershell
 cd "C:\Users\heh\Desktop\NUS project\Silhouette_Survival_Game"
-.\.venv\Scripts\python.exe silhouette_game.py
-```
-
-也可以直接双击 `start_game.bat`。首次启动可能需要等待姿态模型加载。Windows 弹出摄像头权限提示时请选择允许。
-
-如果需要在另一台电脑上重新安装，建议使用 Python 3.11 或更高版本：
-
-```powershell
 python -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 ```
+
+安装完成后，可以双击 `start_game.bat`，或在 PowerShell 中运行：
+
+```powershell
+.\.venv\Scripts\python.exe silhouette_game.py
+```
+
+建议使用 Python 3.11 或更高版本。首次启动可能需要等待姿态模型加载。Windows 弹出摄像头权限提示时请选择允许。
 
 ## 操作
 
