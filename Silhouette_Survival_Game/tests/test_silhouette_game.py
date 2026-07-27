@@ -1,5 +1,6 @@
 import random
 
+import cv2
 import numpy as np
 
 from silhouette_game import (
@@ -11,6 +12,7 @@ from silhouette_game import (
     choose_next_action,
     fit_camera_frame,
     pose_is_visible,
+    request_widest_camera_view,
 )
 from utils.pose_utils import Pose
 
@@ -58,3 +60,36 @@ def test_camera_preview_has_fixed_size_without_cropping() -> None:
     assert np.all(fitted[0] == 10)
     assert np.all(fitted[-1] == 10)
     assert np.all(fitted[CAMERA_PREVIEW_HEIGHT // 2] == 255)
+
+
+def test_camera_requests_manual_minimum_zoom() -> None:
+    class FakeCapture:
+        def __init__(self) -> None:
+            self.zoom = 180.0
+            self.requested = None
+
+        def set(self, prop: int, value: float) -> bool:
+            self.requested = (prop, value)
+            self.zoom = 0.0
+            return True
+
+        def get(self, prop: int) -> float:
+            assert prop == cv2.CAP_PROP_ZOOM
+            return self.zoom
+
+    capture = FakeCapture()
+    locked, zoom = request_widest_camera_view(capture)
+    assert locked
+    assert zoom == 0.0
+    assert capture.requested == (cv2.CAP_PROP_ZOOM, 0.0)
+
+
+def test_unsupported_camera_zoom_is_reported() -> None:
+    class UnsupportedCapture:
+        def set(self, _prop: int, _value: float) -> bool:
+            return False
+
+        def get(self, _prop: int) -> float:
+            return -1.0
+
+    assert request_widest_camera_view(UnsupportedCapture()) == (False, -1.0)
