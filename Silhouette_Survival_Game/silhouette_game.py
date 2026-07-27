@@ -51,6 +51,8 @@ HOLD_SECONDS = 0.55
 PREP_SECONDS = 2.5
 STARTING_ROUND_SECONDS = 5.5
 MINIMUM_ROUND_SECONDS = 3.0
+CAMERA_PREVIEW_WIDTH = 480
+CAMERA_PREVIEW_HEIGHT = 360
 
 
 class GameState(str, Enum):
@@ -241,6 +243,35 @@ def best_pose_score(reference: Pose, player: Optional[Pose]) -> float:
     direct = compute_pose_score(reference, player).total
     mirrored = compute_pose_score(reference, mirror_pose(player)).total
     return float(max(direct, mirrored))
+
+
+def fit_camera_frame(
+    frame: np.ndarray,
+    width: int = CAMERA_PREVIEW_WIDTH,
+    height: int = CAMERA_PREVIEW_HEIGHT,
+) -> np.ndarray:
+    """Fit a camera frame into a fixed viewport without cropping or stretching."""
+
+    if frame.ndim != 3 or frame.shape[2] != 3:
+        raise ValueError("Expected a BGR camera frame with three channels")
+    source_height, source_width = frame.shape[:2]
+    if source_width <= 0 or source_height <= 0 or width <= 0 or height <= 0:
+        raise ValueError("Camera frame and viewport dimensions must be positive")
+
+    scale = min(width / source_width, height / source_height)
+    fitted_width = max(1, int(round(source_width * scale)))
+    fitted_height = max(1, int(round(source_height * scale)))
+    interpolation = cv2.INTER_AREA if scale < 1.0 else cv2.INTER_LINEAR
+    fitted = cv2.resize(
+        frame,
+        (fitted_width, fitted_height),
+        interpolation=interpolation,
+    )
+    canvas = np.full((height, width, 3), 10, dtype=frame.dtype)
+    x0 = (width - fitted_width) // 2
+    y0 = (height - fitted_height) // 2
+    canvas[y0:y0 + fitted_height, x0:x0 + fitted_width] = fitted
+    return canvas
 
 
 class LivePoseWorker:
@@ -440,8 +471,12 @@ class SilhouetteGame:
         content = tk.Frame(self.root, bg="#000000")
         content.pack(fill=tk.BOTH, expand=True, padx=34)
         content.grid_rowconfigure(0, weight=1)
-        content.grid_columnconfigure(0, weight=7)
-        content.grid_columnconfigure(1, weight=5)
+        content.grid_columnconfigure(0, weight=1)
+        content.grid_columnconfigure(
+            1,
+            weight=0,
+            minsize=CAMERA_PREVIEW_WIDTH,
+        )
 
         stage = tk.Frame(
             content,
@@ -493,11 +528,12 @@ class SilhouetteGame:
         camera_card = tk.Frame(
             content,
             bg="#0A0A0A",
+            width=CAMERA_PREVIEW_WIDTH,
             highlightbackground="#2A2A2A",
             highlightthickness=1,
         )
-        camera_card.grid(row=0, column=1, sticky="nsew", padx=(10, 0))
-        camera_card.grid_rowconfigure(1, weight=1)
+        camera_card.grid(row=0, column=1, sticky="n", padx=(10, 0))
+        camera_card.grid_rowconfigure(1, weight=0)
         camera_card.grid_columnconfigure(0, weight=1)
 
         camera_header = tk.Frame(camera_card, bg="#0A0A0A")
@@ -517,15 +553,29 @@ class SilhouetteGame:
             font=("Arial", 10, "bold"),
         ).pack(side=tk.RIGHT)
 
-        self.camera_label = tk.Label(
+        camera_viewport = tk.Frame(
             camera_card,
+            bg="#0A0A0A",
+            width=CAMERA_PREVIEW_WIDTH,
+            height=CAMERA_PREVIEW_HEIGHT,
+        )
+        camera_viewport.grid(row=1, column=0)
+        camera_viewport.grid_propagate(False)
+
+        self.camera_label = tk.Label(
+            camera_viewport,
             bg="#0A0A0A",
             fg="#888888",
             text="正在启动摄像头…",
             font=("Microsoft YaHei UI", 12),
             compound=tk.CENTER,
         )
-        self.camera_label.grid(row=1, column=0, sticky="nsew")
+        self.camera_label.place(
+            x=0,
+            y=0,
+            width=CAMERA_PREVIEW_WIDTH,
+            height=CAMERA_PREVIEW_HEIGHT,
+        )
 
         status_bar = tk.Frame(camera_card, bg="#0A0A0A")
         status_bar.grid(row=2, column=0, sticky="ew", padx=18, pady=16)
@@ -755,15 +805,10 @@ class SilhouetteGame:
         self.after_id = self.root.after(self.TICK_MS, self._tick)
 
     def _show_camera_frame(self, frame: np.ndarray) -> None:
-        width = max(self.camera_label.winfo_width(), 320)
-        height = max(self.camera_label.winfo_height(), 240)
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        fixed_frame = fit_camera_frame(frame)
+        rgb = cv2.cvtColor(fixed_frame, cv2.COLOR_BGR2RGB)
         image = Image.fromarray(rgb)
-        image.thumbnail((width, height), Image.Resampling.LANCZOS)
-        canvas = Image.new("RGB", (width, height), "#0A0A0A")
-        offset = ((width - image.width) // 2, (height - image.height) // 2)
-        canvas.paste(image, offset)
-        self.camera_photo = ImageTk.PhotoImage(canvas)
+        self.camera_photo = ImageTk.PhotoImage(image)
         self.camera_label.configure(image=self.camera_photo, text="")
 
     def _pose_to_canvas(
